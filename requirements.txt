@@ -1,0 +1,7 @@
+cat > requirements.txt <<EOF
+torch
+torchvision
+scikit-learn
+tqdm
+Pillow
+EOF
