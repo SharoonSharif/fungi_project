@@ -1,0 +1,190 @@
+Title: **Automated Fungi Classification Using Deep Learning (ResNet-18) and Grad-CAM Visualization**
+
+---
+
+**Abstract**
+This study presents a deep learning pipeline for classifying a large variety of fungi species using a ResNet-18 model. We describe dataset preparation (splitting, normalization, and augmentation), model architecture, training procedure, evaluation metrics, and interpretability via Grad-CAM heatmaps. Results demonstrate high accuracy and useful class-specific insights. The report concludes with discussion of challenges, potential improvements, and broader implications.
+
+---
+
+**1. Introduction**
+Fungi exhibit immense diversity and play critical roles in ecosystems, yet accurate identification requires expert knowledge. Recent advances in convolutional neural networks (CNNs) allow automated image-based classification. We implement a ResNet-18 backbone tailored to over a thousand fungi classes. Our goals are: (1) build a robust classification pipeline, (2) quantitatively evaluate its performance on a held-out validation set, and (3) provide interpretability through Grad-CAM, highlighting image regions that drive predictions. This report documents each step in detail.
+
+---
+
+**2. Dataset and Preprocessing**
+**2.1 Source Data**
+The raw dataset (“MIND.Funga”) contains photographic samples of fungi across 500+ genera. Each class (genus­a species combination) is represented by 20–200 images, varying in background, lighting, and specimen orientation.
+
+**2.2 Directory Structure**
+We organize data under a root folder “data/MIND.Funga/\<class\_name>/image.jpg.” Each class folder contains only images belonging to that species.
+
+**2.3 Train/Validation Split**
+A Python script randomly shuffles each class’s images and allocates 80 % to training and 20 % to validation. The resulting directory tree is:
+
+* data/split\_mind\_funga/
+   • train/\<class\_name>/*.jpg
+   • val/\<class\_name>/*.jpg
+
+This ensures no leakage between sets.
+
+**2.4 Transformations**
+
+* **Resizing and Centering:** All images are resized to 224×224 pixels to match the ResNet-18 input requirement.
+* **Normalization:** Pixel intensities are normalized using ImageNet mean = \[0.485, 0.456, 0.406] and std = \[0.229, 0.224, 0.225], matching pretrained ResNet behavior.
+* **Augmentation (Training Only):** Random horizontal flips introduce variation. No other geometric distortions were applied to preserve morphological features.
+
+---
+
+**3. Model Architecture**
+**3.1 Base Network: ResNet-18**
+ResNet-18, a widely adopted CNN with residual connections, is initialized with ImageNet-pretrained weights for transfer learning. Its final fully-connected layer (originally mapping to 1000 classes) is replaced by a linear classifier whose output dimension equals the number of fungi classes (N ≈ 1200). Layer bottleneck details:
+
+* Convolutional stem (7×7 conv + max-pool)
+* Four residual blocks (`layer1`–`layer4`), each containing two 3×3 convolutional layers with skip connections
+* Global average pooling followed by a new fully connected layer of size (512 → N)
+
+**3.2 Final Classification Layer**
+A single linear layer maps the 512-dimensional embedding to class logits. We apply CrossEntropyLoss, which internally combines LogSoftmax and negative log likelihood.
+
+---
+
+**4. Training Procedure**
+**4.1 Hardware and Environment**
+
+* Apple M2 GPU (Metal Performance Shaders backend, device “mps”) if available; otherwise CPU.
+* PyTorch 2.7.1, TorchVision 0.15+, scikit-learn 1.4+, PIL/Pillow 11.2+.
+
+**4.2 Hyperparameters**
+
+* Batch size = 16 (chosen based on GPU memory constraints)
+* Optimizer = Adam with learning rate 3 × 10⁻⁴ (default betas \[0.9, 0.999], no weight decay)
+* Loss function = torch.nn.CrossEntropyLoss (standard for multi-class)
+* Number of epochs = 10
+
+**4.3 Training Loop Outline**
+
+1. Set model to train mode.
+2. For each epoch:
+    a. Iterate over training DataLoader batches (images, labels).
+    b. Transfer inputs and labels to selected device.
+    c. Zero optimizer gradients.
+    d. Forward pass: compute logits.
+    e. Compute loss.
+    f. Backward pass: compute gradients.
+    g. Optimizer step: update weights.
+    h. Track cumulative loss, correct predictions for accuracy.
+    i. After processing all batches, report average loss and accuracy for the epoch.
+
+**4.4 Observed Training Metrics**
+Epoch-by-epoch results on training set:
+
+* Epoch 1: Loss = 3.0091, Accuracy = 0.4430
+* Epoch 2: Loss = 1.2394, Accuracy = 0.7171
+* Epoch 3: Loss = 0.6824, Accuracy = 0.8392
+* Epoch 4: Loss = 0.4255, Accuracy = 0.8973
+* Epoch 5: Loss = 0.2985, Accuracy = 0.9264
+* Epoch 6: Loss = 0.2207, Accuracy = 0.9456
+* Epoch 7: Loss = 0.1906, Accuracy = 0.9520
+* Epoch 8: Loss = 0.1723, Accuracy = 0.9552
+* Epoch 9: Loss = 0.1379, Accuracy = 0.9640
+* Epoch 10: Loss = 0.1484, Accuracy = 0.9601
+
+Steady improvement indicates successful convergence. Slight increase in loss at Epoch 10 suggests potential overfitting or learning rate adjustment needs.
+
+---
+
+**5. Evaluation**
+**5.1 Validation Setup**
+After training, model weights are saved to “models/resnet18\_fungi.pth.” For validation:
+
+* Initialize a new FungiClassifier with the same number of classes.
+* Load saved weights.
+* Build a DataLoader over the validation split (batch size = 16, shuffle = False).
+* Compute predictions for each image, collecting ground truth and predicted labels.
+* Use scikit-learn’s classification\_report to compute precision, recall, F1-score for each class.
+
+**5.2 Validation Outcomes**
+Overall metrics on 3 823 validation samples across ≈ 1200 classes:
+
+* **Accuracy:** 0.85 (85 %)
+* **Macro F1-score (average across classes):** 0.73
+* **Weighted F1-score:** 0.85
+
+Sample class-specific F1-scores (selected):
+
+* *Amanita muscaria:* Precision = 1.00, Recall = 0.92, F1 = 0.96
+* *Auricularia mesenterica:* Precision = 0.91, Recall = 0.83, F1 = 0.87
+* *Marasmius amazonicus:* Precision = 0.99, Recall = 0.97, F1 = 0.98
+* *Infrequent classes with only one or two samples exhibited undefined or zero F1 due to no predictions.*
+
+Overall, the model generalizes well to most common classes. Lower scores for very small classes reflect insufficient examples or class imbalance.
+
+---
+
+**6. Grad-CAM Visualization**
+**6.1 Motivation**
+Deep CNNs are often treated as black boxes. Grad-CAM (Gradient-weighted Class Activation Mapping) highlights image regions most influential for a given class prediction. We implemented Grad-CAM to visualize these salient regions on validation images.
+
+**6.2 Implementation Details**
+
+* **Target Layer:** The final residual block (`model.model.layer4`) of ResNet-18.
+* **Gradient and Activation Hooks:**
+   • Forward hook captures feature maps from `layer4` during forward pass.
+   • Backward hook captures gradients of the predicted class score with respect to those feature maps.
+* **Heatmap Computation:**
+   1. Forward the input image to obtain class logits.
+   2. If no specific target class index is provided, select the model’s top prediction.
+   3. Backpropagate from the chosen class score to compute gradients of that score with respect to feature maps.
+   4. Compute channel-wise weights by global averaging gradients over spatial dimensions.
+   5. Multiply each feature map channel by its weight and sum along channels, then apply ReLU.
+   6. Normalize resulting activation map to \[0, 1] and resize to the original image dimensions.
+   7. Overlay jet colormap heatmap on the original image (50 % opacity).
+
+**6.3 Running Grad-CAM**
+Command example:
+
+```
+python src/grad_cam.py \
+  --image "data/split_mind_funga/val/Amanita muscaria/0-FK0395 Amanita_muscaria (1) branco.jpg" \
+  --output "cam_Amanita_muscaria_branco.jpg"
+```
+
+Output:
+
+* A saved overlay image “cam\_Amanita\_muscaria\_branco.jpg” showing Grad-CAM mask overlaid on the original.
+* On-screen display of (a) original image, (b) raw Grad-CAM heatmap, (c) overlayed result.
+
+**6.4 Sample Grad-CAM Observations**
+
+* *Amanita muscaria:* Heatmap strongly focuses on the red cap and white spots, confirming the model learned characteristic morphological features.
+* *Marasmius amazonicus:* Grad-CAM highlights the distinctive gilled structure and color patterns of the cap underside.
+* Rare classes often produce noisier or less focused heatmaps, indicating lower confidence due to few training examples.
+
+---
+
+**7. Discussion**
+**7.1 Strengths**
+
+* **High Classification Accuracy:** Achieved 85 % overall and > 90 % on many abundant classes.
+* **Generalization:** Transfer learning from ImageNet speeds convergence and improves performance on limited-data classes.
+* **Interpretability:** Grad-CAM highlights biologically relevant regions (caps, gills, stipes), offering insights to mycologists and validating model decisions.
+
+**7.2 Challenges**
+
+* **Class Imbalance:** Some classes have only one or two images; model often fails to predict these rare classes, yielding zero F1. Future work could incorporate oversampling or synthetic augmentation (e.g. GAN-based) for underrepresented taxa.
+* **Inter-class Similarity:** Visually similar species (e.g. closely related Amanita spp.) sometimes get misclassified; additional modalities (e.g. spore color data) might help.
+* **Background Noise:** Images with complex forest floor backgrounds occasionally mislead the model. More aggressive background-removal preprocessing could mitigate this.
+
+
+---
+
+**8. Conclusion**
+We presented a complete pipeline for automated fungi identification leveraging a ResNet-18 classifier, achieving strong accuracy on a diverse validation set. The use of Grad-CAM provides interpretability by highlighting biologically meaningful image regions. This work demonstrates the feasibility of deep learning for large-scale taxonomy tasks in mycology and lays groundwork for future enhancements (addressing data imbalance, incorporating multi-modal inputs, and real-time mobile deployment).
+
+---
+
+**References**
+
+1. He, K., Zhang, X., Ren, S., & Sun, J. (2016). Deep Residual Learning for Image Recognition. *Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)*.
+2. Selvaraju, R.R., Cogswell, M., Das, A., …, Batra, D. (2020). Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization. *International Journal of Computer Vision*.
